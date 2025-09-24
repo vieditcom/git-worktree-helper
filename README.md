@@ -126,7 +126,6 @@ The tool automatically copies essential files from the main project:
 - **Environment**: `.env`
 - **Rails credentials**: `config/credentials.yml.enc`, `config/master.key`
 - **IDE configs**: `.vscode/`, `.idea/`, etc.
-- **Ruby LSP**: `.ruby-lsp/`
 - **GitHub**: `.github/`
 
 ## Requirements

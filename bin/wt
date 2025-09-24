@@ -31,6 +31,49 @@ show_version() {
     echo "A tool for managing Git worktrees with automatic server setup"
 }
 
+# Function to close RubyMine window for a specific worktree
+close_rubymine_window() {
+    local feature_name="$1"
+    if [ -z "$feature_name" ]; then
+        return
+    fi
+
+    echo "🔧 Closing RubyMine windows for '$feature_name'..."
+    if command -v osascript >/dev/null 2>&1; then
+        # Get all RubyMine window names
+        local windows=$(osascript -e "tell application \"System Events\" to tell process \"RubyMine\" to get name of every window" 2>/dev/null)
+
+        if [ $? -eq 0 ] && [ -n "$windows" ]; then
+            # Check if any window contains the feature name
+            local found_window=false
+
+            # Split windows by comma and check each one
+            IFS=',' read -ra WINDOW_ARRAY <<< "$windows"
+            for window in "${WINDOW_ARRAY[@]}"; do
+                # Trim whitespace
+                window=$(echo "$window" | xargs)
+                if [[ "$window" == *"$feature_name"* ]]; then
+                    found_window=true
+                    echo "🎯 Found matching window: $window"
+                    # Close this specific window by clicking its close button
+                    osascript -e "tell application \"System Events\" to tell process \"RubyMine\" to click button 1 of window \"$window\"" 2>/dev/null
+                    sleep 0.3  # Brief pause to allow window to close
+                fi
+            done
+
+            if [ "$found_window" = true ]; then
+                echo "✅ RubyMine window(s) closed"
+            else
+                echo "⚠️  No RubyMine window found containing '$feature_name'"
+            fi
+        else
+            echo "⚠️  RubyMine not running or no windows found"
+        fi
+    else
+        echo "⚠️  AppleScript not available, skipping window close"
+    fi
+}
+
 # Main worktree creation function
 create_worktree() {
     local feature_name="$1"
@@ -116,7 +159,7 @@ create_worktree() {
     fi
 
     # List of hidden folders to copy if they exist (ONLY from main project)
-    local hidden_dirs=(.github .idea .ruby-lsp .vscode)
+    local hidden_dirs=(.github .idea .vscode)
 
     for dir in "${hidden_dirs[@]}"; do
         if [ -d "$project_dir/$dir" ]; then
@@ -574,6 +617,9 @@ remove_worktree() {
     rm -f "$worktree_path/tmp/.webpack_pid" 2>/dev/null
     rm -f "$worktree_path/tmp/.webpack_port" 2>/dev/null
 
+    # Close RubyMine window for this worktree
+    close_rubymine_window "$feature_name"
+
     # Remove the worktree
     git -C "$project_dir" worktree remove "$worktree_path" --force
 
@@ -649,6 +695,8 @@ cleanup_all() {
         for worktree_path in $(git worktree list | grep "$worktree_parent" | awk '{print $1}'); do
             local branch_name=$(basename "$worktree_path")
             echo "  • $branch_name"
+            # Close RubyMine window for this worktree
+            close_rubymine_window "$branch_name"
             git worktree remove "$worktree_path" --force 2>/dev/null
             git branch -D "$branch_name" 2>/dev/null
         done
