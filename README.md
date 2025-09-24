@@ -9,10 +9,11 @@ A powerful command-line tool that simplifies Git worktree management with automa
 - 🚂 **Rails server auto-start** with smart port allocation
 - 📦 **Webpack dev server support** with compilation monitoring
 - 🔐 **Credential copying** (.env, Rails credentials, master.key)
-- 📁 **IDE configuration copying** (.vscode, etc.)
+- 📁 **IDE configuration copying** (.idea, .vscode, etc.)
+- 💻 **RubyMine integration** with automatic window management
 - 🌐 **Auto browser opening** when Rails server is ready
 - 📋 **Log management** with easy viewing commands
-- 🧹 **Clean removal** with server shutdown and branch cleanup
+- 🧹 **Intelligent cleanup** with IDE window closing and server shutdown
 - 📊 **Server monitoring** and listing capabilities
 
 ## Installation
@@ -51,7 +52,7 @@ wt my-feature
 # 4. Install dependencies (bundle install, yarn install)
 # 5. Start Rails server on available port (3001+)
 # 6. Start Webpack dev server if available
-# 7. Open in Cursor editor
+# 7. Open in RubyMine IDE
 # 8. Open browser when Rails is ready
 ```
 
@@ -70,11 +71,14 @@ wt webpack-logs my-feature
 # Stop servers in current worktree
 wt stop
 
-# Remove worktree and stop servers
+# Remove worktree, stop servers, and close RubyMine window
 wt remove my-feature
 
-# Merge feature and cleanup
+# Merge feature, cleanup, and close RubyMine window
 wt merge my-feature main
+
+# Or merge into main branch (default)
+wt merge my-feature
 
 # Remove ALL worktrees (careful!)
 wt cleanup-all
@@ -134,7 +138,7 @@ The tool automatically copies essential files from the main project:
 - **Ruby/Rails** projects: `bundle` command available
 - **Node.js** projects: `yarn` command available
 - **macOS/Linux**: Uses `lsof` for port detection
-- **Optional**: `cursor` command for editor integration
+- **Optional**: RubyMine IDE for automatic window management
 
 ## Examples
 
@@ -147,12 +151,12 @@ wt user-authentication
 
 # Your feature worktree is created and Rails starts on port 3001
 # Browser opens to http://localhost:3001
-# Cursor editor opens the worktree
+# RubyMine IDE opens the worktree
 
 # Work on your feature...
 
-# When done, merge and cleanup
-wt merge user-authentication main
+# When done, merge and cleanup (defaults to main branch)
+wt merge user-authentication
 
 # Or just remove without merging
 wt remove user-authentication
@@ -239,6 +243,38 @@ ls -la /usr/local/bin/
 # Or install to a different directory
 cp bin/wt ~/bin/wt  # If ~/bin is in your PATH
 ```
+
+## Updating After Local Changes
+
+If you modify the script locally and want to apply the changes:
+
+```bash
+# Reinstall the updated script
+./install.sh
+
+# Reload your shell configuration to pick up any changes
+source ~/.zshrc    # For Zsh users
+# or
+source ~/.bashrc   # For Bash users
+
+# Verify the update worked
+wt --version
+```
+
+### RubyMine Integration
+
+The tool includes intelligent RubyMine integration:
+
+- **Automatic window opening** when creating worktrees
+- **Smart window closing** when removing/merging worktrees
+- **IDE folder cleanup** (`.idea` folder) to prevent removal issues
+- **Graceful fallbacks** if RubyMine isn't running or available
+
+The window management works by:
+1. Detecting RubyMine windows by name matching
+2. Closing specific windows before worktree removal
+3. Cleaning up IDE lock files that might prevent folder deletion
+4. Providing clear feedback on window operations
 
 ## Uninstallation
 

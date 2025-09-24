@@ -11,7 +11,7 @@ show_help() {
     echo "  wt <feature-name>              Create a new worktree and branch"
     echo "  wt stop                        Stop servers in current worktree"
     echo "  wt remove <feature-name>       Remove worktree and stop servers"
-    echo "  wt merge <feature-name> [branch] Merge and cleanup worktree (default: master)"
+    echo "  wt merge <feature-name> [branch] Merge and cleanup worktree (default: main)"
     echo "  wt logs [feature-name]         View Rails logs for worktree"
     echo "  wt webpack-logs [feature-name] View Webpack logs for worktree"
     echo "  wt list                        List all running worktree servers"
@@ -620,12 +620,51 @@ remove_worktree() {
     # Close RubyMine window for this worktree
     close_rubymine_window "$feature_name"
 
+    # Wait for RubyMine to fully release file handles and clean up IDE folders
+    echo "🧹 Cleaning up IDE files that might prevent removal..."
+    sleep 1  # Give RubyMine time to release file handles
+
+    # Force remove IDE folders that might have locks or open file handles
+    local ide_folders=(".idea" ".vscode" ".ruby-lsp")
+    for folder in "${ide_folders[@]}"; do
+        if [ -d "$worktree_path/$folder" ]; then
+            echo "  🗑️  Force removing $folder folder..."
+            # Use chmod to ensure we can delete everything, then force remove
+            chmod -R 755 "$worktree_path/$folder" 2>/dev/null
+            rm -rf "$worktree_path/$folder" 2>/dev/null
+            if [ ! -d "$worktree_path/$folder" ]; then
+                echo "  ✅ $folder folder removed"
+            else
+                echo "  ⚠️  $folder folder still exists, will try during worktree removal"
+            fi
+        fi
+    done
+
     # Remove the worktree
-    git -C "$project_dir" worktree remove "$worktree_path" --force
+    echo "🗑️  Removing worktree..."
+    if git -C "$project_dir" worktree remove "$worktree_path" --force; then
+        echo "✅ Worktree removed successfully"
+    else
+        echo "⚠️  Git worktree remove failed, attempting manual cleanup..."
+        # If git worktree remove fails, manually remove the directory
+        if [ -d "$worktree_path" ]; then
+            echo "🧹 Force removing directory: $worktree_path"
+            rm -rf "$worktree_path"
+            if [ ! -d "$worktree_path" ]; then
+                echo "✅ Directory manually removed"
+                # Clean up the worktree from git's tracking
+                git -C "$project_dir" worktree prune
+            else
+                echo "❌ Failed to remove directory even with force. Manual intervention required."
+                echo "   You may need to close any remaining applications using files in this directory"
+                echo "   Then manually run: rm -rf \"$worktree_path\""
+            fi
+        fi
+    fi
 
     # Delete the branch (optional - ask user)
     echo -n "🗑️  Delete branch '$feature_name'? (y/N): "
-    read -r REPLY
+    read -r REPLY </dev/tty
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         git -C "$project_dir" branch -D "$feature_name"
         echo "🗑️  Deleted branch '$feature_name'"
@@ -697,6 +736,16 @@ cleanup_all() {
             echo "  • $branch_name"
             # Close RubyMine window for this worktree
             close_rubymine_window "$branch_name"
+
+            # Clean up IDE folders that might prevent removal
+            local ide_folders=(".idea" ".vscode" ".ruby-lsp")
+            for folder in "${ide_folders[@]}"; do
+                if [ -d "$worktree_path/$folder" ]; then
+                    chmod -R 755 "$worktree_path/$folder" 2>/dev/null
+                    rm -rf "$worktree_path/$folder" 2>/dev/null
+                fi
+            done
+
             git worktree remove "$worktree_path" --force 2>/dev/null
             git branch -D "$branch_name" 2>/dev/null
         done
@@ -744,7 +793,7 @@ merge_worktree() {
 
         # Ask if user wants to push
         echo -n "🚀 Push '$target_branch' to origin? (Y/n): "
-        read -r REPLY
+        read -r REPLY </dev/tty
         if [[ ! $REPLY =~ ^[Nn]$ ]]; then
             git -C "$project_dir" push origin "$target_branch"
             echo "🚀 Pushed '$target_branch' to origin"
