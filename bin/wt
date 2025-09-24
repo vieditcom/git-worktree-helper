@@ -135,12 +135,12 @@ create_worktree() {
         exit 1
     fi
 
-    # Open the worktree in Cursor immediately
-    echo "💻 Opening worktree in Cursor..."
-    if command -v cursor >/dev/null 2>&1; then
-        cursor "$worktree_path" &
+    # Open the worktree in RubyMine immediately
+    echo "💻 Opening worktree in RubyMine..."
+    if [ -f "/Applications/RubyMine.app/Contents/MacOS/rubymine" ]; then
+        "/Applications/RubyMine.app/Contents/MacOS/rubymine" "$worktree_path" &
     else
-        echo "⚠️  WARNING: 'cursor' command not found, skipping editor launch"
+        echo "⚠️  WARNING: RubyMine not found, skipping IDE launch"
     fi
 
     # Install dependencies if this is a Rails project
