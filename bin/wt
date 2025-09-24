@@ -462,10 +462,30 @@ remove_worktree() {
         exit 1
     fi
 
-    # Get the current Git project directory
-    local project_dir=$(git rev-parse --show-toplevel 2>/dev/null)
+    # Get the current Git project directory (must be inside a Git repo)
+    local current_git_dir
+    current_git_dir=$(git rev-parse --show-toplevel 2>/dev/null)
     if [ $? -ne 0 ]; then
-        echo "❌ Not in a Git repository"
+        echo "❌ ERROR: Not in a Git repository"
+        exit 1
+    fi
+
+    # Check if we're in a worktree and find the main project directory
+    local project_dir
+    if [[ "$current_git_dir" == *"/WT/"* ]]; then
+        # We're in a worktree, find the main project directory
+        local worktree_parent=$(dirname "$current_git_dir")
+        local project_name=$(basename "$worktree_parent")
+        project_dir="$(dirname "$(dirname "$worktree_parent")")/$project_name"
+        echo "🔍 Detected worktree environment, using main project: $project_dir"
+    else
+        # We're in the main project
+        project_dir="$current_git_dir"
+    fi
+
+    # Verify the main project directory exists
+    if [ ! -d "$project_dir" ]; then
+        echo "❌ ERROR: Main project directory not found: $project_dir"
         exit 1
     fi
 
