@@ -45,11 +45,11 @@ create_worktree() {
 
     # Check if we're in a worktree and find the main project directory
     local project_dir
-    if [[ "$current_git_dir" == *"-worktrees/"* ]]; then
+    if [[ "$current_git_dir" == *"/WT/"* ]]; then
         # We're in a worktree, find the main project directory
         local worktree_parent=$(dirname "$current_git_dir")
-        local project_name=$(basename "$worktree_parent" | sed 's/-worktrees$//')
-        project_dir="$(dirname "$worktree_parent")/$project_name"
+        local project_name=$(basename "$worktree_parent")
+        project_dir="$(dirname "$(dirname "$worktree_parent")")/$project_name"
         echo "🔍 Detected worktree environment, using main project: $project_dir"
     else
         # We're in the main project
@@ -71,8 +71,8 @@ create_worktree() {
         exit 1
     fi
 
-    # Define the parent folder where all worktrees go, beside the main repo
-    local worktree_parent="$(dirname "$project_dir")/${project_name}-worktrees"
+    # Define the parent folder where all worktrees go, organized under WT
+    local worktree_parent="$(dirname "$project_dir")/WT/${project_name}"
 
     # Define the full path of the new worktree folder
     local worktree_path="${worktree_parent}/${feature_name}"
@@ -116,7 +116,7 @@ create_worktree() {
     fi
 
     # List of hidden folders to copy if they exist (ONLY from main project)
-    local hidden_dirs=(.claude .cursor .github .idea .ruby-lsp .vscode)
+    local hidden_dirs=(.github .idea .ruby-lsp .vscode)
 
     for dir in "${hidden_dirs[@]}"; do
         if [ -d "$project_dir/$dir" ]; then
@@ -307,12 +307,12 @@ view_logs() {
     # If no feature name provided, try to detect from current directory
     if [ -z "$feature_name" ]; then
         local current_dir=$(pwd)
-        if [[ "$current_dir" == *"-worktrees/"* ]]; then
+        if [[ "$current_dir" == *"/WT/"* ]]; then
             feature_name=$(basename "$current_dir")
             echo "📋 Auto-detected feature: $feature_name"
         else
             echo "❌ Usage: wt logs <feature-name>"
-            echo "   Or run from within a worktree directory (path must contain '-worktrees/')"
+            echo "   Or run from within a worktree directory (path must contain '/WT/')"
             exit 1
         fi
     fi
@@ -326,13 +326,13 @@ view_logs() {
 
     # Check if we're already in a worktree or in the main project
     local worktree_path
-    if [[ "$git_toplevel" == *"-worktrees/"* ]]; then
+    if [[ "$git_toplevel" == */WT/* ]]; then
         # We're inside a worktree, use the current path
         worktree_path="$git_toplevel"
     else
         # We're in the main project, construct the worktree path
         local project_name=$(basename "$git_toplevel")
-        local worktree_parent="$(dirname "$git_toplevel")/${project_name}-worktrees"
+        local worktree_parent="$(dirname "$git_toplevel")/WT/${project_name}"
         worktree_path="${worktree_parent}/${feature_name}"
     fi
 
@@ -362,12 +362,12 @@ view_webpack_logs() {
     # If no feature name provided, try to detect from current directory
     if [ -z "$feature_name" ]; then
         local current_dir=$(pwd)
-        if [[ "$current_dir" == *"-worktrees/"* ]]; then
+        if [[ "$current_dir" == *"/WT/"* ]]; then
             feature_name=$(basename "$current_dir")
             echo "📋 Auto-detected feature: $feature_name"
         else
             echo "❌ Usage: wt webpack-logs <feature-name>"
-            echo "   Or run from within a worktree directory (path must contain '-worktrees/')"
+            echo "   Or run from within a worktree directory (path must contain '/WT/')"
             exit 1
         fi
     fi
@@ -381,13 +381,13 @@ view_webpack_logs() {
 
     # Check if we're already in a worktree or in the main project
     local worktree_path
-    if [[ "$git_toplevel" == *"-worktrees/"* ]]; then
+    if [[ "$git_toplevel" == */WT/* ]]; then
         # We're inside a worktree, use the current path
         worktree_path="$git_toplevel"
     else
         # We're in the main project, construct the worktree path
         local project_name=$(basename "$git_toplevel")
-        local worktree_parent="$(dirname "$git_toplevel")/${project_name}-worktrees"
+        local worktree_parent="$(dirname "$git_toplevel")/WT/${project_name}"
         worktree_path="${worktree_parent}/${feature_name}"
     fi
 
@@ -425,7 +425,7 @@ list_servers() {
         echo "$rails_processes" | while read line; do
             local pid=$(echo "$line" | awk '{print $2}')
             local port=$(echo "$line" | grep -o "\-p [0-9]*" | cut -d' ' -f2)
-            local dir=$(echo "$line" | grep -o "/[^[:space:]]*worktrees/[^[:space:]]*" | head -1)
+            local dir=$(echo "$line" | grep -o "/[^[:space:]]*/WT/[^[:space:]]*" | head -1)
 
             if [ -n "$dir" ]; then
                 local feature_name=$(basename "$dir")
@@ -436,13 +436,13 @@ list_servers() {
 
     echo ""
     echo "📦 Webpack Servers:"
-    local webpack_processes=$(ps aux | grep "webpack-dev-server" | grep worktrees | grep -v grep)
+    local webpack_processes=$(ps aux | grep "webpack-dev-server" | grep "/WT/" | grep -v grep)
     if [ -z "$webpack_processes" ]; then
         echo "   No Webpack dev servers currently running"
     else
         echo "$webpack_processes" | while read line; do
             local pid=$(echo "$line" | awk '{print $2}')
-            local dir=$(echo "$line" | grep -o "/[^[:space:]]*worktrees/[^[:space:]]*" | head -1)
+            local dir=$(echo "$line" | grep -o "/[^[:space:]]*/WT/[^[:space:]]*" | head -1)
 
             if [ -n "$dir" ]; then
                 local feature_name=$(basename "$dir")
@@ -473,7 +473,7 @@ remove_worktree() {
     local project_name=$(basename "$project_dir")
 
     # Define the worktree path
-    local worktree_parent="$(dirname "$project_dir")/${project_name}-worktrees"
+    local worktree_parent="$(dirname "$project_dir")/WT/${project_name}"
     local worktree_path="${worktree_parent}/${feature_name}"
 
     # Check if worktree exists
@@ -582,7 +582,7 @@ cleanup_all() {
     fi
 
     local project_name=$(basename "$project_dir")
-    local worktree_parent="$(dirname "$project_dir")/${project_name}-worktrees"
+    local worktree_parent="$(dirname "$project_dir")/WT/${project_name}"
 
     # Stop Rails servers related to this project's worktrees (excluding port 3000)
     echo "🚂 Stopping worktree Rails servers (preserving port 3000)..."
