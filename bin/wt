@@ -1,0 +1,740 @@
+#!/bin/bash
+
+# Git Worktree Helper - A tool for managing Git worktrees with ease
+# Version: 1.0.0
+
+# Function to show help
+show_help() {
+    echo "Git Worktree Helper - Manage Git worktrees with ease"
+    echo ""
+    echo "USAGE:"
+    echo "  wt <feature-name>              Create a new worktree and branch"
+    echo "  wt stop                        Stop servers in current worktree"
+    echo "  wt remove <feature-name>       Remove worktree and stop servers"
+    echo "  wt merge <feature-name> [branch] Merge and cleanup worktree (default: master)"
+    echo "  wt logs [feature-name]         View Rails logs for worktree"
+    echo "  wt webpack-logs [feature-name] View Webpack logs for worktree"
+    echo "  wt list                        List all running worktree servers"
+    echo "  wt cleanup-all                 Remove ALL worktrees and stop servers"
+    echo "  wt --help, -h                  Show this help message"
+    echo "  wt --version, -v               Show version information"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  wt feature-login               Create worktree for 'feature-login'"
+    echo "  wt remove feature-login        Remove the 'feature-login' worktree"
+    echo "  wt merge feature-login main    Merge into 'main' branch"
+}
+
+# Function to show version
+show_version() {
+    echo "Git Worktree Helper v1.0.0"
+    echo "A tool for managing Git worktrees with automatic server setup"
+}
+
+# Main worktree creation function
+create_worktree() {
+    local feature_name="$1"
+
+    # Get the current Git project directory (must be inside a Git repo)
+    local current_git_dir
+    current_git_dir=$(git rev-parse --show-toplevel 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "❌ ERROR: Not in a Git repository"
+        exit 1
+    fi
+
+    # Check if we're in a worktree and find the main project directory
+    local project_dir
+    if [[ "$current_git_dir" == *"-worktrees/"* ]]; then
+        # We're in a worktree, find the main project directory
+        local worktree_parent=$(dirname "$current_git_dir")
+        local project_name=$(basename "$worktree_parent" | sed 's/-worktrees$//')
+        project_dir="$(dirname "$worktree_parent")/$project_name"
+        echo "🔍 Detected worktree environment, using main project: $project_dir"
+    else
+        # We're in the main project
+        project_dir="$current_git_dir"
+    fi
+
+    # Verify the main project directory exists
+    if [ ! -d "$project_dir" ]; then
+        echo "❌ ERROR: Main project directory not found: $project_dir"
+        exit 1
+    fi
+
+    # Get the base name of the current project folder
+    local project_name=$(basename "$project_dir")
+
+    # Fail fast if no feature name was provided
+    if [ -z "$feature_name" ]; then
+        echo "❌ Usage: wt <feature-name>"
+        exit 1
+    fi
+
+    # Define the parent folder where all worktrees go, beside the main repo
+    local worktree_parent="$(dirname "$project_dir")/${project_name}-worktrees"
+
+    # Define the full path of the new worktree folder
+    local worktree_path="${worktree_parent}/${feature_name}"
+
+    # Create the parent worktrees folder if it doesn't exist
+    if ! mkdir -p "$worktree_parent"; then
+        echo "❌ ERROR: Failed to create worktree parent directory"
+        exit 1
+    fi
+
+    # Create the worktree and the branch
+    if ! git -C "$project_dir" worktree add -b "$feature_name" "$worktree_path"; then
+        echo "❌ ERROR: Failed to create worktree"
+        exit 1
+    fi
+
+    # Copy .env if it exists
+    if [ -f "$project_dir/.env" ]; then
+        if cp "$project_dir/.env" "$worktree_path/.env"; then
+            echo "📋 Copied .env into worktree."
+        else
+            echo "⚠️  WARNING: Failed to copy .env file"
+        fi
+    fi
+
+    # Copy Rails credentials if they exist
+    if [ -f "$project_dir/config/credentials.yml.enc" ]; then
+        if cp "$project_dir/config/credentials.yml.enc" "$worktree_path/config/credentials.yml.enc"; then
+            echo "🔐 Copied credentials.yml.enc into worktree."
+        else
+            echo "⚠️  WARNING: Failed to copy credentials.yml.enc"
+        fi
+    fi
+
+    if [ -f "$project_dir/config/master.key" ]; then
+        if cp "$project_dir/config/master.key" "$worktree_path/config/master.key"; then
+            echo "🔑 Copied master.key into worktree."
+        else
+            echo "⚠️  WARNING: Failed to copy master.key"
+        fi
+    fi
+
+    # List of hidden folders to copy if they exist (ONLY from main project)
+    local hidden_dirs=(.claude .cursor .github .idea .ruby-lsp .vscode)
+
+    for dir in "${hidden_dirs[@]}"; do
+        if [ -d "$project_dir/$dir" ]; then
+            # Create the destination directory first, then copy contents
+            if mkdir -p "$worktree_path/$dir" && cp -R "$project_dir/$dir/"* "$worktree_path/$dir/"; then
+                echo "📁 Copied $dir into worktree."
+            else
+                echo "⚠️  WARNING: Failed to copy $dir"
+            fi
+        fi
+    done
+
+    # cd into the new worktree
+    if ! cd "$worktree_path"; then
+        echo "❌ ERROR: Failed to change to worktree directory"
+        exit 1
+    fi
+
+    # Open the worktree in Cursor immediately
+    echo "💻 Opening worktree in Cursor..."
+    if command -v cursor >/dev/null 2>&1; then
+        cursor "$worktree_path" &
+    else
+        echo "⚠️  WARNING: 'cursor' command not found, skipping editor launch"
+    fi
+
+    # Install dependencies if this is a Rails project
+    if [ -f "$worktree_path/Gemfile" ]; then
+        echo "💎 Installing Ruby gems..."
+        if bundle install --quiet; then
+            echo "✅ Ruby gems installed successfully"
+        else
+            echo "⚠️  WARNING: Failed to install Ruby gems (continuing anyway)"
+        fi
+    fi
+
+    if [ -f "$worktree_path/package.json" ] || [ -f "$worktree_path/yarn.lock" ]; then
+        echo "📦 Installing Node.js dependencies..."
+        if yarn install --silent; then
+            echo "✅ Node.js dependencies installed successfully"
+        else
+            echo "⚠️  WARNING: Failed to install Node.js dependencies (continuing anyway)"
+        fi
+    fi
+
+    # Find next available port for Rails (starting from 3001)
+    local rails_port=3001
+    while lsof -ti tcp:$rails_port >/dev/null 2>&1; do
+        rails_port=$((rails_port + 1))
+    done
+
+    # Check if this is a Rails project
+    if [ -f "$worktree_path/bin/rails" ]; then
+        echo "🚂 Starting Rails server on port $rails_port..."
+        # Create tmp directory if it doesn't exist
+        mkdir -p tmp
+        # Start Rails server in background with proper PID capture
+        bin/rails server -p $rails_port > tmp/rails.log 2>&1 &
+        local rails_pid=$!
+
+        # Wait a moment and verify the process is actually running
+        sleep 1
+        if kill -0 "$rails_pid" 2>/dev/null; then
+            echo "Rails server started with PID $rails_pid on http://localhost:$rails_port"
+            echo "$rails_pid" > tmp/.rails_pid
+            echo "$rails_port" > tmp/.rails_port
+            echo "📋 To view Rails logs in real-time: tail -f tmp/rails.log"
+            echo "📋 To view Rails logs from worktree: wt logs $feature_name"
+        else
+            echo "⚠️  WARNING: Failed to start Rails server (check tmp/rails.log for details)"
+        fi
+    fi
+
+    # Check if this has Webpack dev server
+    if [ -f "$worktree_path/bin/webpack-dev-server" ]; then
+        # Find next available port for Webpack (starting from 3036)
+        local webpack_port=3036
+        while lsof -ti tcp:$webpack_port >/dev/null 2>&1; do
+            webpack_port=$((webpack_port + 1))
+        done
+        echo "📦 Starting Webpack dev server on port $webpack_port..."
+
+        # Update webpacker.yml to use the unique port (if it exists)
+        # Commended our, hopefully not needed
+        # if [ -f "$worktree_path/config/webpacker.yml" ]; then
+        #     sed -i.bak "s/port: 3035/port: $webpack_port/g" config/webpacker.yml
+        #     sed -i.bak "s/public: localhost:3035/public: localhost:$webpack_port/g" config/webpacker.yml
+        #     echo "🔧 Updated webpacker.yml to use port $webpack_port"
+        # fi
+
+        # Start Webpack dev server with command-line arguments for dynamic port configuration
+        bin/webpack-dev-server --port $webpack_port --host localhost --public localhost:$webpack_port > tmp/webpack.log 2>&1 &
+        local webpack_pid=$!
+
+        # Wait a moment and verify the process is actually running
+        sleep 1
+        if kill -0 "$webpack_pid" 2>/dev/null; then
+            echo "✅ Webpack dev server started with PID $webpack_pid on port $webpack_port"
+            echo "$webpack_pid" > tmp/.webpack_pid
+            echo "$webpack_port" > tmp/.webpack_port
+        else
+            echo "⚠️  WARNING: Failed to start Webpack dev server (check tmp/webpack.log for details)"
+        fi
+
+        # Wait for Webpack to compile before opening browser
+        if [ -f "$worktree_path/bin/rails" ]; then
+            echo "⏳ Waiting for Webpack to compile assets..."
+            # Wait for "Compiled successfully" in tmp/webpack.log
+            timeout=60
+            while [ $timeout -gt 0 ]; do
+                if grep -q "Compiled successfully" tmp/webpack.log 2>/dev/null; then
+                    echo "✅ Webpack compilation complete!"
+                    break
+                elif grep -q "Failed to compile\|ERROR in\|Module not found" tmp/webpack.log 2>/dev/null; then
+                    echo "❌ Webpack compilation failed! Check tmp/webpack.log for errors:"
+                    echo "   tail -f tmp/webpack.log"
+                    echo "   wt logs $feature_name (for Rails logs)"
+                    break
+                fi
+                sleep 1
+                timeout=$((timeout - 1))
+            done
+
+            # Check if we timed out
+            if [ $timeout -eq 0 ]; then
+                echo "⚠️  Webpack compilation timeout (60s). Check tmp/webpack.log:"
+                echo "   tail -f tmp/webpack.log"
+            fi
+
+            # Test if Rails server is responding (give it more time since it's starting in new terminal)
+            echo "🔍 Waiting for Rails server to start and testing connection..."
+            sleep 3  # Give Rails extra time to start in the new terminal
+            for i in {1..15}; do
+                if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$rails_port" 2>/dev/null | grep -q "200"; then
+                    echo "✅ Rails server is responding!"
+                    if command -v open >/dev/null 2>&1; then
+                        (sleep 2 && open "http://localhost:$rails_port" 2>/dev/null) &
+                        echo "🌐 Opening http://localhost:$rails_port in browser..."
+                    fi
+                    break
+                fi
+                echo "⏳ Attempt $i/15 - Rails server not ready yet..."
+                sleep 2
+            done
+        fi
+    fi
+
+    # Confirm success
+    echo "✅ Worktree '$feature_name' created at $worktree_path and checked out."
+
+    if [ -f "$worktree_path/bin/rails" ]; then
+        echo "🌐 Rails app available at: http://localhost:$rails_port"
+    fi
+}
+
+# Function to stop servers in current worktree
+stop_servers() {
+    echo "🛑 Stopping servers in current worktree..."
+
+    # Stop Rails server if running
+    if [ -f "tmp/.rails_pid" ]; then
+        local rails_pid=$(cat tmp/.rails_pid)
+        if kill -0 "$rails_pid" 2>/dev/null; then
+            kill "$rails_pid"
+            echo "🚂 Stopped Rails server (PID: $rails_pid)"
+        fi
+        rm tmp/.rails_pid
+    fi
+
+    # Stop Webpack dev server if running
+    if [ -f "tmp/.webpack_pid" ]; then
+        local webpack_pid=$(cat tmp/.webpack_pid)
+        if kill -0 "$webpack_pid" 2>/dev/null; then
+            kill "$webpack_pid"
+            echo "📦 Stopped Webpack dev server (PID: $webpack_pid)"
+        fi
+        rm tmp/.webpack_pid
+        [ -f "tmp/.webpack_port" ] && rm tmp/.webpack_port
+    fi
+
+    echo "✅ All servers stopped."
+}
+
+# Function to view Rails logs for a specific worktree
+view_logs() {
+    local feature_name="$1"
+
+    # If no feature name provided, try to detect from current directory
+    if [ -z "$feature_name" ]; then
+        local current_dir=$(pwd)
+        if [[ "$current_dir" == *"-worktrees/"* ]]; then
+            feature_name=$(basename "$current_dir")
+            echo "📋 Auto-detected feature: $feature_name"
+        else
+            echo "❌ Usage: wt logs <feature-name>"
+            echo "   Or run from within a worktree directory (path must contain '-worktrees/')"
+            exit 1
+        fi
+    fi
+
+    # Get the current Git project directory
+    local git_toplevel=$(git rev-parse --show-toplevel 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "❌ Not in a Git repository"
+        exit 1
+    fi
+
+    # Check if we're already in a worktree or in the main project
+    local worktree_path
+    if [[ "$git_toplevel" == *"-worktrees/"* ]]; then
+        # We're inside a worktree, use the current path
+        worktree_path="$git_toplevel"
+    else
+        # We're in the main project, construct the worktree path
+        local project_name=$(basename "$git_toplevel")
+        local worktree_parent="$(dirname "$git_toplevel")/${project_name}-worktrees"
+        worktree_path="${worktree_parent}/${feature_name}"
+    fi
+
+    # Check if worktree exists
+    if [ ! -d "$worktree_path" ]; then
+        echo "❌ Worktree '$feature_name' not found at $worktree_path"
+        exit 1
+    fi
+
+    # Check if Rails log exists
+    if [ ! -f "$worktree_path/tmp/rails.log" ]; then
+        echo "❌ No Rails log found for '$feature_name'"
+        echo "   Expected: $worktree_path/tmp/rails.log"
+        exit 1
+    fi
+
+    echo "📋 Viewing Rails logs for '$feature_name' (Ctrl+C to exit)"
+    echo "🔗 Log file: $worktree_path/tmp/rails.log"
+    echo ""
+    tail -f "$worktree_path/tmp/rails.log"
+}
+
+# Function to view Webpack logs for a specific worktree
+view_webpack_logs() {
+    local feature_name="$1"
+
+    # If no feature name provided, try to detect from current directory
+    if [ -z "$feature_name" ]; then
+        local current_dir=$(pwd)
+        if [[ "$current_dir" == *"-worktrees/"* ]]; then
+            feature_name=$(basename "$current_dir")
+            echo "📋 Auto-detected feature: $feature_name"
+        else
+            echo "❌ Usage: wt webpack-logs <feature-name>"
+            echo "   Or run from within a worktree directory (path must contain '-worktrees/')"
+            exit 1
+        fi
+    fi
+
+    # Get the current Git project directory
+    local git_toplevel=$(git rev-parse --show-toplevel 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "❌ Not in a Git repository"
+        exit 1
+    fi
+
+    # Check if we're already in a worktree or in the main project
+    local worktree_path
+    if [[ "$git_toplevel" == *"-worktrees/"* ]]; then
+        # We're inside a worktree, use the current path
+        worktree_path="$git_toplevel"
+    else
+        # We're in the main project, construct the worktree path
+        local project_name=$(basename "$git_toplevel")
+        local worktree_parent="$(dirname "$git_toplevel")/${project_name}-worktrees"
+        worktree_path="${worktree_parent}/${feature_name}"
+    fi
+
+    # Check if worktree exists
+    if [ ! -d "$worktree_path" ]; then
+        echo "❌ Worktree '$feature_name' not found at $worktree_path"
+        exit 1
+    fi
+
+    # Check if Webpack log exists
+    if [ ! -f "$worktree_path/tmp/webpack.log" ]; then
+        echo "❌ No Webpack log found for '$feature_name'"
+        echo "   Expected: $worktree_path/tmp/webpack.log"
+        exit 1
+    fi
+
+    echo "📦 Viewing Webpack logs for '$feature_name' (Ctrl+C to exit)"
+    echo "🔗 Log file: $worktree_path/tmp/webpack.log"
+    echo ""
+    tail -f "$worktree_path/tmp/webpack.log"
+}
+
+# Function to list all running Rails servers from worktrees
+list_servers() {
+    echo "📋 Active worktree servers:"
+    echo ""
+
+    # Find all Rails servers with their directories and ports
+    local rails_processes=$(ps aux | grep "rails server" | grep -v grep)
+
+    if [ -z "$rails_processes" ]; then
+        echo "   No Rails servers currently running"
+    else
+        echo "🚂 Rails Servers:"
+        echo "$rails_processes" | while read line; do
+            local pid=$(echo "$line" | awk '{print $2}')
+            local port=$(echo "$line" | grep -o "\-p [0-9]*" | cut -d' ' -f2)
+            local dir=$(echo "$line" | grep -o "/[^[:space:]]*worktrees/[^[:space:]]*" | head -1)
+
+            if [ -n "$dir" ]; then
+                local feature_name=$(basename "$dir")
+                echo "   • $feature_name - PID: $pid - Port: $port - http://localhost:$port"
+            fi
+        done
+    fi
+
+    echo ""
+    echo "📦 Webpack Servers:"
+    local webpack_processes=$(ps aux | grep "webpack-dev-server" | grep worktrees | grep -v grep)
+    if [ -z "$webpack_processes" ]; then
+        echo "   No Webpack dev servers currently running"
+    else
+        echo "$webpack_processes" | while read line; do
+            local pid=$(echo "$line" | awk '{print $2}')
+            local dir=$(echo "$line" | grep -o "/[^[:space:]]*worktrees/[^[:space:]]*" | head -1)
+
+            if [ -n "$dir" ]; then
+                local feature_name=$(basename "$dir")
+                echo "   • $feature_name - PID: $pid"
+            fi
+        done
+    fi
+}
+
+# Function to remove worktree and stop servers
+remove_worktree() {
+    local feature_name="$1"
+
+    # Fail fast if no feature name was provided
+    if [ -z "$feature_name" ]; then
+        echo "❌ Usage: wt remove <feature-name>"
+        exit 1
+    fi
+
+    # Get the current Git project directory
+    local project_dir=$(git rev-parse --show-toplevel 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "❌ Not in a Git repository"
+        exit 1
+    fi
+
+    # Get the base name of the current project folder
+    local project_name=$(basename "$project_dir")
+
+    # Define the worktree path
+    local worktree_parent="$(dirname "$project_dir")/${project_name}-worktrees"
+    local worktree_path="${worktree_parent}/${feature_name}"
+
+    # Check if worktree exists
+    if [ ! -d "$worktree_path" ]; then
+        echo "❌ Worktree '$feature_name' not found at $worktree_path"
+        exit 1
+    fi
+
+    echo "🧹 Cleaning up worktree '$feature_name'..."
+
+    # Stop Rails server with multiple fallback strategies
+    local rails_stopped=false
+    if [ -f "$worktree_path/tmp/.rails_pid" ]; then
+        local rails_pid=$(cat "$worktree_path/tmp/.rails_pid")
+        if kill -0 "$rails_pid" 2>/dev/null; then
+            kill "$rails_pid"
+            echo "🚂 Stopped Rails server (PID: $rails_pid)"
+            rails_stopped=true
+        fi
+    fi
+
+    # Fallback: find Rails server by port if PID method failed
+    if [ ! "$rails_stopped" = true ] && [ -f "$worktree_path/tmp/.rails_port" ]; then
+        local rails_port=$(cat "$worktree_path/tmp/.rails_port")
+        local rails_pid=$(lsof -ti tcp:$rails_port 2>/dev/null)
+        if [ -n "$rails_pid" ]; then
+            kill "$rails_pid"
+            echo "🚂 Stopped Rails server on port $rails_port (PID: $rails_pid)"
+            rails_stopped=true
+        fi
+    fi
+
+    # Final fallback: find Rails/Puma processes by worktree name
+    if [ ! "$rails_stopped" = true ]; then
+        local puma_pids=$(ps aux | grep "puma.*\[$feature_name\]" | grep -v grep | awk '{print $2}')
+        if [ -n "$puma_pids" ]; then
+            echo "$puma_pids" | xargs kill
+            echo "🚂 Stopped Rails server processes: $puma_pids"
+        fi
+    fi
+
+    # Stop Webpack dev server with multiple fallback strategies
+    local webpack_stopped=false
+    if [ -f "$worktree_path/tmp/.webpack_pid" ]; then
+        local webpack_pid=$(cat "$worktree_path/tmp/.webpack_pid")
+        if kill -0 "$webpack_pid" 2>/dev/null; then
+            kill "$webpack_pid"
+            echo "📦 Stopped Webpack dev server (PID: $webpack_pid)"
+            webpack_stopped=true
+        fi
+        rm "$worktree_path/tmp/.webpack_pid" 2>/dev/null
+        rm "$worktree_path/tmp/.webpack_port" 2>/dev/null
+    fi
+
+    # Fallback: find Webpack server by port if PID method failed
+    if [ ! "$webpack_stopped" = true ] && [ -f "$worktree_path/tmp/.webpack_port" ]; then
+        local webpack_port=$(cat "$worktree_path/tmp/.webpack_port")
+        local webpack_pid=$(lsof -ti tcp:$webpack_port 2>/dev/null)
+        if [ -n "$webpack_pid" ]; then
+            kill "$webpack_pid"
+            echo "📦 Stopped Webpack dev server on port $webpack_port (PID: $webpack_pid)"
+            webpack_stopped=true
+        fi
+    fi
+
+    # Final fallback: find webpack-dev-server processes by worktree path
+    if [ ! "$webpack_stopped" = true ]; then
+        local webpack_pids=$(ps aux | grep "webpack-dev-server.*$worktree_path" | grep -v grep | awk '{print $2}')
+        if [ -n "$webpack_pids" ]; then
+            echo "$webpack_pids" | xargs kill
+            echo "📦 Stopped Webpack dev server processes: $webpack_pids"
+        fi
+    fi
+
+    # Clean up all PID and port files
+    rm -f "$worktree_path/tmp/.rails_pid" 2>/dev/null
+    rm -f "$worktree_path/tmp/.rails_port" 2>/dev/null
+    rm -f "$worktree_path/tmp/.webpack_pid" 2>/dev/null
+    rm -f "$worktree_path/tmp/.webpack_port" 2>/dev/null
+
+    # Remove the worktree
+    git -C "$project_dir" worktree remove "$worktree_path" --force
+
+    # Delete the branch (optional - ask user)
+    echo -n "🗑️  Delete branch '$feature_name'? (y/N): "
+    read -r REPLY
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        git -C "$project_dir" branch -D "$feature_name"
+        echo "🗑️  Deleted branch '$feature_name'"
+    fi
+
+    echo "✅ Worktree '$feature_name' removed and servers stopped."
+}
+
+# Function to clean up ALL worktrees and servers (for testing cleanup)
+cleanup_all() {
+    echo "🧹 Starting comprehensive cleanup of ALL worktrees and servers..."
+    echo "⚠️  This will remove ALL worktrees and stop ALL related servers!"
+    echo "🛡️  Main project servers (port 3000 Rails, port 3035 Webpack) will be preserved"
+
+    # Get the current Git project directory
+    local project_dir=$(git rev-parse --show-toplevel 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "❌ Not in a Git repository"
+        exit 1
+    fi
+
+    local project_name=$(basename "$project_dir")
+    local worktree_parent="$(dirname "$project_dir")/${project_name}-worktrees"
+
+    # Stop Rails servers related to this project's worktrees (excluding port 3000)
+    echo "🚂 Stopping worktree Rails servers (preserving port 3000)..."
+    local rails_pids=$(ps aux | grep "rails server" | grep "$worktree_parent" | grep -v grep | awk '{print $2}')
+    if [ -n "$rails_pids" ]; then
+        for pid in $rails_pids; do
+            # Check if this process is NOT using port 3000
+            local port_check=$(ps -p $pid -o args= | grep -o "\-p [0-9]*" | cut -d' ' -f2)
+            if [ "$port_check" != "3000" ]; then
+                kill $pid 2>/dev/null && echo "  Stopped Rails server PID: $pid (port: ${port_check:-unknown})"
+            else
+                echo "  Preserved Rails server PID: $pid (port: 3000)"
+            fi
+        done
+    else
+        echo "  No worktree Rails servers found"
+    fi
+
+    # Stop Webpack dev servers related to this project's worktrees (excluding port 3035)
+    echo "📦 Stopping worktree Webpack servers (preserving port 3035)..."
+    local webpack_pids=$(ps aux | grep "webpack-dev-server" | grep "$worktree_parent" | grep -v grep | awk '{print $2}')
+    if [ -n "$webpack_pids" ]; then
+        for pid in $webpack_pids; do
+            # Check if this process is NOT using port 3035
+            local port_check=$(ps -p $pid -o args= | grep -o "\-\-port [0-9]*" | cut -d' ' -f2)
+            if [ "$port_check" != "3035" ]; then
+                kill $pid 2>/dev/null && echo "  Stopped Webpack server PID: $pid (port: ${port_check:-unknown})"
+            else
+                echo "  Preserved Webpack server PID: $pid (port: 3035)"
+            fi
+        done
+    else
+        echo "  No worktree Webpack servers found"
+    fi
+
+    echo "⏳ Waiting for servers to stop..."
+    sleep 3
+
+    # Get list of all worktrees (excluding main)
+    local worktrees=$(git worktree list | grep "$worktree_parent" | awk '{print $1}' | xargs -I {} basename {})
+
+    if [ -n "$worktrees" ]; then
+        echo "🗑️ Removing worktrees and branches:"
+        for worktree_path in $(git worktree list | grep "$worktree_parent" | awk '{print $1}'); do
+            local branch_name=$(basename "$worktree_path")
+            echo "  • $branch_name"
+            git worktree remove "$worktree_path" --force 2>/dev/null
+            git branch -D "$branch_name" 2>/dev/null
+        done
+    else
+        echo "  No worktrees found to remove"
+    fi
+
+    # Remove the entire worktrees directory
+    if [ -d "$worktree_parent" ]; then
+        echo "🧹 Removing worktrees directory: $worktree_parent"
+        rm -rf "$worktree_parent"
+    fi
+
+    echo "✅ Cleanup complete! All worktrees removed and servers stopped."
+}
+
+# Function to merge and cleanup worktree
+merge_worktree() {
+    local feature_name="$1"
+    local target_branch="${2:-main}"
+
+    # Fail fast if no feature name was provided
+    if [ -z "$feature_name" ]; then
+        echo "❌ Usage: wt merge <feature-name> [target-branch]"
+        echo "   Default target branch is 'main'"
+        exit 1
+    fi
+
+    # Get the current Git project directory
+    local project_dir=$(git rev-parse --show-toplevel 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "❌ Not in a Git repository"
+        exit 1
+    fi
+
+    echo "🔄 Merging '$feature_name' into '$target_branch'..."
+
+    # Switch to target branch and pull latest
+    git -C "$project_dir" checkout "$target_branch"
+    git -C "$project_dir" pull origin "$target_branch"
+
+    # Merge the feature branch
+    if git -C "$project_dir" merge "$feature_name"; then
+        echo "✅ Successfully merged '$feature_name' into '$target_branch'"
+
+        # Ask if user wants to push
+        echo -n "🚀 Push '$target_branch' to origin? (Y/n): "
+        read -r REPLY
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            git -C "$project_dir" push origin "$target_branch"
+            echo "🚀 Pushed '$target_branch' to origin"
+        fi
+
+        # Now cleanup the worktree (ensure we're in the main project directory)
+        echo ""
+        cd "$project_dir"
+        remove_worktree "$feature_name"
+    else
+        echo "❌ Merge failed. Please resolve conflicts manually."
+        echo "   After resolving, you can run: wt remove $feature_name"
+        exit 1
+    fi
+}
+
+# Main command dispatcher
+main() {
+    case "${1:-}" in
+        --help|-h)
+            show_help
+            ;;
+        --version|-v)
+            show_version
+            ;;
+        stop)
+            stop_servers
+            ;;
+        remove)
+            remove_worktree "$2"
+            ;;
+        merge)
+            merge_worktree "$2" "$3"
+            ;;
+        logs)
+            view_logs "$2"
+            ;;
+        webpack-logs)
+            view_webpack_logs "$2"
+            ;;
+        list)
+            list_servers
+            ;;
+        cleanup-all)
+            cleanup_all
+            ;;
+        "")
+            echo "❌ No command provided"
+            echo ""
+            show_help
+            exit 1
+            ;;
+        *)
+            # Default action: create worktree
+            create_worktree "$1"
+            ;;
+    esac
+}
+
+# Run main function with all arguments
+main "$@"
