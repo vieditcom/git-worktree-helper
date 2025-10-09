@@ -243,15 +243,16 @@ create_worktree() {
         echo "📦 Starting Webpack dev server on port $webpack_port..."
 
         # Update webpacker.yml to use the unique port (if it exists)
-        # Commended our, hopefully not needed
-        # if [ -f "$worktree_path/config/webpacker.yml" ]; then
-        #     sed -i.bak "s/port: 3035/port: $webpack_port/g" config/webpacker.yml
-        #     sed -i.bak "s/public: localhost:3035/public: localhost:$webpack_port/g" config/webpacker.yml
-        #     echo "🔧 Updated webpacker.yml to use port $webpack_port"
-        # fi
+        if [ -f "$worktree_path/config/webpacker.yml" ]; then
+            sed -i '' "s/port: 3035/port: $webpack_port/g" config/webpacker.yml
+            sed -i '' "s/public: localhost:3035/public: localhost:$webpack_port/g" config/webpacker.yml
+            # Mark the file to be skipped by git to prevent accidental commits
+            git update-index --skip-worktree config/webpacker.yml
+            echo "🔧 Updated webpacker.yml to use port $webpack_port"
+        fi
 
-        # Start Webpack dev server with command-line arguments for dynamic port configuration
-        bin/webpack-dev-server --port $webpack_port --host localhost --public localhost:$webpack_port > tmp/webpack.log 2>&1 &
+        # Start Webpack dev server (port is configured in webpacker.yml)
+        bin/webpack-dev-server > tmp/webpack.log 2>&1 &
         local webpack_pid=$!
 
         # Wait a moment and verify the process is actually running
