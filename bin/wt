@@ -663,12 +663,28 @@ remove_worktree() {
         fi
     fi
 
-    # Delete the branch (optional - ask user)
-    echo -n "🗑️  Delete branch '$feature_name'? (y/N): "
-    read -r REPLY </dev/tty
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        git -C "$project_dir" branch -D "$feature_name"
-        echo "🗑️  Deleted branch '$feature_name'"
+    # Check if branch has any unique commits compared to main
+    local main_branch=$(git -C "$project_dir" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+    if [ -z "$main_branch" ]; then
+        main_branch="main"  # Default to main if can't detect
+    fi
+
+    # Count commits that are in feature branch but not in main branch
+    local unique_commits=$(git -C "$project_dir" rev-list --count "${main_branch}..${feature_name}" 2>/dev/null || echo "0")
+
+    if [ "$unique_commits" -eq 0 ]; then
+        # No unique commits, auto-delete without asking
+        git -C "$project_dir" branch -D "$feature_name" 2>/dev/null
+        echo "🗑️  Auto-deleted branch '$feature_name' (no unique commits)"
+    else
+        # Has unique commits, ask user
+        echo "⚠️  Branch '$feature_name' has $unique_commits unique commit(s)"
+        echo -n "🗑️  Delete branch '$feature_name'? (y/N): "
+        read -r REPLY </dev/tty
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            git -C "$project_dir" branch -D "$feature_name"
+            echo "🗑️  Deleted branch '$feature_name'"
+        fi
     fi
 
     echo "✅ Worktree '$feature_name' removed and servers stopped."
