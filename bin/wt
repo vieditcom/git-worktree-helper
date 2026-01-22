@@ -849,10 +849,16 @@ merge_worktree() {
     if git -C "$project_dir" merge "$feature_name"; then
         echo "✅ Successfully merged '$feature_name' into '$target_branch'"
 
-        # Now cleanup the worktree (ensure we're in the main project directory)
+        # Ask about worktree cleanup
         echo ""
-        cd "$project_dir"
-        remove_worktree "$feature_name"
+        echo -n "🧹 Remove worktree '$feature_name'? (Y/n): "
+        read -r REPLY </dev/tty
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            cd "$project_dir"
+            remove_worktree "$feature_name"
+        else
+            echo "⏭️  Skipping worktree removal. You can remove it later with: wt remove $feature_name"
+        fi
     else
         echo "❌ Merge failed. Please resolve conflicts manually."
         echo "   After resolving, you can run: wt remove $feature_name"
