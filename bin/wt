@@ -3,6 +3,38 @@
 # Git Worktree Helper - A tool for managing Git worktrees with ease
 # Version: 1.0.0
 
+# Helper function to get the main project directory regardless of current location
+# Sets: PROJECT_DIR (main project), CURRENT_IS_WORKTREE (true/false), WORKTREE_PARENT (WT folder path)
+detect_project_context() {
+    local current_git_dir
+    current_git_dir=$(git rev-parse --show-toplevel 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        echo "❌ ERROR: Not in a Git repository"
+        exit 1
+    fi
+
+    # Check if current directory is a worktree using git worktree list
+    local worktree_info=$(git worktree list --porcelain 2>/dev/null)
+    local main_worktree=$(echo "$worktree_info" | grep -A1 "^worktree " | head -2 | tail -1 | sed 's/^worktree //')
+
+    # First worktree in the list is always the main one
+    main_worktree=$(echo "$worktree_info" | grep "^worktree " | head -1 | sed 's/^worktree //')
+
+    if [ "$current_git_dir" = "$main_worktree" ]; then
+        # We're in the main project
+        PROJECT_DIR="$current_git_dir"
+        CURRENT_IS_WORKTREE=false
+    else
+        # We're in a worktree, use the main worktree as project dir
+        PROJECT_DIR="$main_worktree"
+        CURRENT_IS_WORKTREE=true
+    fi
+
+    # Define the worktree parent folder
+    local project_name=$(basename "$PROJECT_DIR")
+    WORKTREE_PARENT="$(dirname "$PROJECT_DIR")/WT/${project_name}"
+}
+
 # Function to show help
 show_help() {
     echo "Git Worktree Helper - Manage Git worktrees with ease"
@@ -78,25 +110,19 @@ close_rubymine_window() {
 create_worktree() {
     local feature_name="$1"
 
-    # Get the current Git project directory (must be inside a Git repo)
-    local current_git_dir
-    current_git_dir=$(git rev-parse --show-toplevel 2>/dev/null)
-    if [ $? -ne 0 ]; then
-        echo "❌ ERROR: Not in a Git repository"
+    # Fail fast if no feature name was provided
+    if [ -z "$feature_name" ]; then
+        echo "❌ Usage: wt <feature-name>"
         exit 1
     fi
 
-    # Check if we're in a worktree and find the main project directory
-    local project_dir
-    if [[ "$current_git_dir" == *"/WT/"* ]]; then
-        # We're in a worktree, find the main project directory
-        local worktree_parent=$(dirname "$current_git_dir")
-        local project_name=$(basename "$worktree_parent")
-        project_dir="$(dirname "$(dirname "$worktree_parent")")/$project_name"
-        echo "🔍 Detected worktree environment, using main project: $project_dir"
-    else
-        # We're in the main project
-        project_dir="$current_git_dir"
+    # Detect project context (works from main or any worktree)
+    detect_project_context
+    local project_dir="$PROJECT_DIR"
+    local worktree_parent="$WORKTREE_PARENT"
+
+    if [ "$CURRENT_IS_WORKTREE" = true ]; then
+        echo "🔍 Running from worktree, using main project: $project_dir"
     fi
 
     # Verify the main project directory exists
@@ -107,15 +133,6 @@ create_worktree() {
 
     # Get the base name of the current project folder
     local project_name=$(basename "$project_dir")
-
-    # Fail fast if no feature name was provided
-    if [ -z "$feature_name" ]; then
-        echo "❌ Usage: wt <feature-name>"
-        exit 1
-    fi
-
-    # Define the parent folder where all worktrees go, organized under WT
-    local worktree_parent="$(dirname "$project_dir")/WT/${project_name}"
 
     # Define the full path of the new worktree folder
     local worktree_path="${worktree_parent}/${feature_name}"
@@ -530,39 +547,15 @@ remove_worktree() {
         exit 1
     fi
 
-    # Get the current Git project directory (must be inside a Git repo)
-    local current_git_dir
-    current_git_dir=$(git rev-parse --show-toplevel 2>/dev/null)
-    if [ $? -ne 0 ]; then
-        echo "❌ ERROR: Not in a Git repository"
-        exit 1
-    fi
-
-    # Check if we're in a worktree and find the main project directory
-    local project_dir
-    if [[ "$current_git_dir" == *"/WT/"* ]]; then
-        # We're in a worktree, find the main project directory
-        local worktree_parent=$(dirname "$current_git_dir")
-        local project_name=$(basename "$worktree_parent")
-        project_dir="$(dirname "$(dirname "$worktree_parent")")/$project_name"
-        echo "🔍 Detected worktree environment, using main project: $project_dir"
-    else
-        # We're in the main project
-        project_dir="$current_git_dir"
-    fi
-
-    # Verify the main project directory exists
-    if [ ! -d "$project_dir" ]; then
-        echo "❌ ERROR: Main project directory not found: $project_dir"
-        exit 1
-    fi
-
-    # Get the base name of the current project folder
-    local project_name=$(basename "$project_dir")
-
-    # Define the worktree path
-    local worktree_parent="$(dirname "$project_dir")/WT/${project_name}"
+    # Detect project context (works from main or any worktree)
+    detect_project_context
+    local project_dir="$PROJECT_DIR"
+    local worktree_parent="$WORKTREE_PARENT"
     local worktree_path="${worktree_parent}/${feature_name}"
+
+    if [ "$CURRENT_IS_WORKTREE" = true ]; then
+        echo "🔍 Running from worktree, using main project: $project_dir"
+    fi
 
     # Check if worktree exists
     if [ ! -d "$worktree_path" ]; then
@@ -720,15 +713,14 @@ cleanup_all() {
     echo "⚠️  This will remove ALL worktrees and stop ALL related servers!"
     echo "🛡️  Main project servers (port 3000 Rails, port 3035 Webpack) will be preserved"
 
-    # Get the current Git project directory
-    local project_dir=$(git rev-parse --show-toplevel 2>/dev/null)
-    if [ $? -ne 0 ]; then
-        echo "❌ Not in a Git repository"
-        exit 1
-    fi
+    # Detect project context (works from main or any worktree)
+    detect_project_context
+    local project_dir="$PROJECT_DIR"
+    local worktree_parent="$WORKTREE_PARENT"
 
-    local project_name=$(basename "$project_dir")
-    local worktree_parent="$(dirname "$project_dir")/WT/${project_name}"
+    if [ "$CURRENT_IS_WORKTREE" = true ]; then
+        echo "🔍 Running from worktree, using main project: $project_dir"
+    fi
 
     # Stop Rails servers related to this project's worktrees (excluding port 3000)
     echo "🚂 Stopping worktree Rails servers (preserving port 3000)..."
@@ -815,24 +807,15 @@ merge_worktree() {
         exit 1
     fi
 
-    # Get the current Git project directory
-    local project_dir=$(git rev-parse --show-toplevel 2>/dev/null)
-    if [ $? -ne 0 ]; then
-        echo "❌ Not in a Git repository"
-        exit 1
-    fi
-
-    # Check if we're in a worktree and find the main project directory
-    if [[ "$project_dir" == *"/WT/"* ]]; then
-        local worktree_parent=$(dirname "$project_dir")
-        local project_name=$(basename "$worktree_parent")
-        project_dir="$(dirname "$(dirname "$worktree_parent")")/$project_name"
-    fi
-
-    # Define the worktree path
-    local project_name=$(basename "$project_dir")
-    local worktree_parent="$(dirname "$project_dir")/WT/${project_name}"
+    # Detect project context (works from main or any worktree)
+    detect_project_context
+    local project_dir="$PROJECT_DIR"
+    local worktree_parent="$WORKTREE_PARENT"
     local worktree_path="${worktree_parent}/${feature_name}"
+
+    if [ "$CURRENT_IS_WORKTREE" = true ]; then
+        echo "🔍 Running from worktree, using main project: $project_dir"
+    fi
 
     # Check if worktree exists
     if [ ! -d "$worktree_path" ]; then
