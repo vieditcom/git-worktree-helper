@@ -822,6 +822,40 @@ merge_worktree() {
         exit 1
     fi
 
+    # Check if we're in a worktree and find the main project directory
+    if [[ "$project_dir" == *"/WT/"* ]]; then
+        local worktree_parent=$(dirname "$project_dir")
+        local project_name=$(basename "$worktree_parent")
+        project_dir="$(dirname "$(dirname "$worktree_parent")")/$project_name"
+    fi
+
+    # Define the worktree path
+    local project_name=$(basename "$project_dir")
+    local worktree_parent="$(dirname "$project_dir")/WT/${project_name}"
+    local worktree_path="${worktree_parent}/${feature_name}"
+
+    # Check if worktree exists
+    if [ ! -d "$worktree_path" ]; then
+        echo "❌ Worktree '$feature_name' not found at $worktree_path"
+        exit 1
+    fi
+
+    # Check for uncommitted changes in the worktree BEFORE doing anything
+    local worktree_status=$(git -C "$worktree_path" status --porcelain 2>/dev/null)
+    if [ -n "$worktree_status" ]; then
+        echo "❌ ERROR: Worktree '$feature_name' has uncommitted changes!"
+        echo ""
+        echo "Uncommitted files:"
+        git -C "$worktree_path" status --short
+        echo ""
+        echo "Please commit or stash your changes before merging."
+        echo "   cd $worktree_path"
+        echo "   git add . && git commit -m 'your message'"
+        echo ""
+        echo "Or discard changes with: git -C \"$worktree_path\" checkout -- ."
+        exit 1
+    fi
+
     echo "🔄 Merging '$feature_name' into '$target_branch'..."
 
     # Switch to target branch and pull latest
