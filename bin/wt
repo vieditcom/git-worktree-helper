@@ -267,26 +267,50 @@ create_worktree() {
 
         # Wait for Webpack to compile before opening browser
         if [ -f "$worktree_path/bin/rails" ]; then
-            echo "⏳ Waiting for Webpack to compile assets..."
-            # Wait for Webpack compilation to complete in tmp/webpack.log
-            timeout=60
+            echo "⏳ Waiting for Webpack dev server to be ready..."
+
+            # Configuration
+            local max_timeout=180  # Maximum wait time in seconds
+            local timeout=$max_timeout
+            local last_progress=""
+            local check_interval=2
+            local webpack_ready=false
+
             while [ $timeout -gt 0 ]; do
-                if grep -q "Compiled successfully\|\[webpack\.Progress\] 100%" tmp/webpack.log 2>/dev/null; then
-                    echo "✅ Webpack compilation complete!"
+                # Primary check: Is webpack dev server responding on its port?
+                local http_code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$webpack_port" 2>/dev/null)
+                if [[ "$http_code" =~ ^(200|404|302)$ ]]; then
+                    echo "✅ Webpack dev server is ready!"
+                    webpack_ready=true
                     break
-                elif grep -q "Failed to compile\|ERROR in\|Module not found" tmp/webpack.log 2>/dev/null; then
+                fi
+
+                # Error detection: Check for compilation failures in logs
+                if grep -q "Failed to compile\|ERROR in\|Module not found" tmp/webpack.log 2>/dev/null; then
                     echo "❌ Webpack compilation failed! Check tmp/webpack.log for errors:"
                     echo "   tail -f tmp/webpack.log"
                     echo "   wt logs $feature_name (for Rails logs)"
                     break
                 fi
-                sleep 1
-                timeout=$((timeout - 1))
+
+                # Progress-based timeout extension: Reset if progress is being made
+                local current_progress=$(grep -o "\[webpack\.Progress\] [0-9]*%" tmp/webpack.log 2>/dev/null | tail -1)
+                if [ -n "$current_progress" ] && [ "$current_progress" != "$last_progress" ]; then
+                    # Progress detected, extend timeout (but not beyond max)
+                    if [ $timeout -lt 60 ]; then
+                        timeout=60
+                        echo "📊 Progress detected ($current_progress), extending timeout..."
+                    fi
+                    last_progress="$current_progress"
+                fi
+
+                sleep $check_interval
+                timeout=$((timeout - check_interval))
             done
 
             # Check if we timed out
-            if [ $timeout -eq 0 ]; then
-                echo "⚠️  Webpack compilation timeout (60s). Check tmp/webpack.log:"
+            if [ $timeout -le 0 ]; then
+                echo "⚠️  Webpack compilation timeout (${max_timeout}s). Check tmp/webpack.log:"
                 echo "   tail -f tmp/webpack.log"
             fi
 
@@ -807,14 +831,6 @@ merge_worktree() {
     # Merge the feature branch
     if git -C "$project_dir" merge "$feature_name"; then
         echo "✅ Successfully merged '$feature_name' into '$target_branch'"
-
-        # Ask if user wants to push
-        echo -n "🚀 Push '$target_branch' to origin? (Y/n): "
-        read -r REPLY </dev/tty
-        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            git -C "$project_dir" push origin "$target_branch"
-            echo "🚀 Pushed '$target_branch' to origin"
-        fi
 
         # Now cleanup the worktree (ensure we're in the main project directory)
         echo ""
