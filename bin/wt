@@ -63,6 +63,114 @@ show_version() {
     echo "A tool for managing Git worktrees with automatic server setup"
 }
 
+# Function to stop servers for a specific worktree (without removing the worktree)
+# Arguments: worktree_path, feature_name
+stop_worktree_servers() {
+    local worktree_path="$1"
+    local feature_name="$2"
+
+    # Stop Rails server with multiple fallback strategies
+    local rails_stopped=false
+    if [ -f "$worktree_path/tmp/.rails_pid" ]; then
+        local rails_pid=$(cat "$worktree_path/tmp/.rails_pid")
+        if kill -0 "$rails_pid" 2>/dev/null; then
+            kill "$rails_pid"
+            echo "🚂 Stopped Rails server (PID: $rails_pid)"
+            rails_stopped=true
+        fi
+    fi
+
+    # Fallback: find Rails server by port if PID method failed
+    if [ ! "$rails_stopped" = true ] && [ -f "$worktree_path/tmp/.rails_port" ]; then
+        local rails_port=$(cat "$worktree_path/tmp/.rails_port")
+        local rails_pid=$(lsof -ti tcp:$rails_port 2>/dev/null)
+        if [ -n "$rails_pid" ]; then
+            kill "$rails_pid"
+            echo "🚂 Stopped Rails server on port $rails_port (PID: $rails_pid)"
+            rails_stopped=true
+        fi
+    fi
+
+    # Final fallback: find Rails/Puma processes by worktree name
+    if [ ! "$rails_stopped" = true ]; then
+        local puma_pids=$(ps aux | grep "puma.*\[$feature_name\]" | grep -v grep | awk '{print $2}')
+        if [ -n "$puma_pids" ]; then
+            echo "$puma_pids" | xargs kill
+            echo "🚂 Stopped Rails server processes: $puma_pids"
+        fi
+    fi
+
+    # Stop Webpack dev server with multiple fallback strategies
+    local webpack_stopped=false
+    if [ -f "$worktree_path/tmp/.webpack_pid" ]; then
+        local webpack_pid=$(cat "$worktree_path/tmp/.webpack_pid")
+        if kill -0 "$webpack_pid" 2>/dev/null; then
+            kill "$webpack_pid"
+            echo "📦 Stopped Webpack dev server (PID: $webpack_pid)"
+            webpack_stopped=true
+        fi
+    fi
+
+    # Fallback: find Webpack server by port if PID method failed
+    if [ ! "$webpack_stopped" = true ] && [ -f "$worktree_path/tmp/.webpack_port" ]; then
+        local webpack_port=$(cat "$worktree_path/tmp/.webpack_port")
+        local webpack_pid=$(lsof -ti tcp:$webpack_port 2>/dev/null)
+        if [ -n "$webpack_pid" ]; then
+            kill "$webpack_pid"
+            echo "📦 Stopped Webpack dev server on port $webpack_port (PID: $webpack_pid)"
+            webpack_stopped=true
+        fi
+    fi
+
+    # Final fallback: find webpack-dev-server processes by worktree path
+    if [ ! "$webpack_stopped" = true ]; then
+        local webpack_pids=$(ps aux | grep "webpack-dev-server.*$worktree_path" | grep -v grep | awk '{print $2}')
+        if [ -n "$webpack_pids" ]; then
+            echo "$webpack_pids" | xargs kill
+            echo "📦 Stopped Webpack dev server processes: $webpack_pids"
+        fi
+    fi
+
+    # Clean up PID and port files
+    rm -f "$worktree_path/tmp/.rails_pid" 2>/dev/null
+    rm -f "$worktree_path/tmp/.rails_port" 2>/dev/null
+    rm -f "$worktree_path/tmp/.webpack_pid" 2>/dev/null
+    rm -f "$worktree_path/tmp/.webpack_port" 2>/dev/null
+}
+
+# Function to offer branch deletion after merge (when worktree is kept)
+# Arguments: project_dir, feature_name
+offer_branch_deletion() {
+    local project_dir="$1"
+    local feature_name="$2"
+
+    # Check if branch has any unique commits compared to main
+    local main_branch=$(git -C "$project_dir" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+    if [ -z "$main_branch" ]; then
+        main_branch="main"
+    fi
+
+    # Count commits that are in feature branch but not in main branch
+    local unique_commits=$(git -C "$project_dir" rev-list --count "${main_branch}..${feature_name}" 2>/dev/null || echo "0")
+
+    if [ "$unique_commits" -eq 0 ]; then
+        # No unique commits, auto-delete without asking
+        git -C "$project_dir" branch -D "$feature_name" 2>/dev/null
+        echo "🗑️  Auto-deleted branch '$feature_name' (no unique commits)"
+    else
+        # Has unique commits, ask user
+        echo "⚠️  Branch '$feature_name' has $unique_commits unique commit(s)"
+        echo -n "🗑️  Delete branch '$feature_name'? (y/N): "
+        read -r REPLY </dev/tty
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            git -C "$project_dir" branch -D "$feature_name"
+            echo "🗑️  Deleted branch '$feature_name'"
+        else
+            echo "⏭️  Keeping branch '$feature_name'"
+        fi
+    fi
+}
+
 # Function to close RubyMine window for a specific worktree
 close_rubymine_window() {
     local feature_name="$1"
@@ -565,75 +673,8 @@ remove_worktree() {
 
     echo "🧹 Cleaning up worktree '$feature_name'..."
 
-    # Stop Rails server with multiple fallback strategies
-    local rails_stopped=false
-    if [ -f "$worktree_path/tmp/.rails_pid" ]; then
-        local rails_pid=$(cat "$worktree_path/tmp/.rails_pid")
-        if kill -0 "$rails_pid" 2>/dev/null; then
-            kill "$rails_pid"
-            echo "🚂 Stopped Rails server (PID: $rails_pid)"
-            rails_stopped=true
-        fi
-    fi
-
-    # Fallback: find Rails server by port if PID method failed
-    if [ ! "$rails_stopped" = true ] && [ -f "$worktree_path/tmp/.rails_port" ]; then
-        local rails_port=$(cat "$worktree_path/tmp/.rails_port")
-        local rails_pid=$(lsof -ti tcp:$rails_port 2>/dev/null)
-        if [ -n "$rails_pid" ]; then
-            kill "$rails_pid"
-            echo "🚂 Stopped Rails server on port $rails_port (PID: $rails_pid)"
-            rails_stopped=true
-        fi
-    fi
-
-    # Final fallback: find Rails/Puma processes by worktree name
-    if [ ! "$rails_stopped" = true ]; then
-        local puma_pids=$(ps aux | grep "puma.*\[$feature_name\]" | grep -v grep | awk '{print $2}')
-        if [ -n "$puma_pids" ]; then
-            echo "$puma_pids" | xargs kill
-            echo "🚂 Stopped Rails server processes: $puma_pids"
-        fi
-    fi
-
-    # Stop Webpack dev server with multiple fallback strategies
-    local webpack_stopped=false
-    if [ -f "$worktree_path/tmp/.webpack_pid" ]; then
-        local webpack_pid=$(cat "$worktree_path/tmp/.webpack_pid")
-        if kill -0 "$webpack_pid" 2>/dev/null; then
-            kill "$webpack_pid"
-            echo "📦 Stopped Webpack dev server (PID: $webpack_pid)"
-            webpack_stopped=true
-        fi
-        rm "$worktree_path/tmp/.webpack_pid" 2>/dev/null
-        rm "$worktree_path/tmp/.webpack_port" 2>/dev/null
-    fi
-
-    # Fallback: find Webpack server by port if PID method failed
-    if [ ! "$webpack_stopped" = true ] && [ -f "$worktree_path/tmp/.webpack_port" ]; then
-        local webpack_port=$(cat "$worktree_path/tmp/.webpack_port")
-        local webpack_pid=$(lsof -ti tcp:$webpack_port 2>/dev/null)
-        if [ -n "$webpack_pid" ]; then
-            kill "$webpack_pid"
-            echo "📦 Stopped Webpack dev server on port $webpack_port (PID: $webpack_pid)"
-            webpack_stopped=true
-        fi
-    fi
-
-    # Final fallback: find webpack-dev-server processes by worktree path
-    if [ ! "$webpack_stopped" = true ]; then
-        local webpack_pids=$(ps aux | grep "webpack-dev-server.*$worktree_path" | grep -v grep | awk '{print $2}')
-        if [ -n "$webpack_pids" ]; then
-            echo "$webpack_pids" | xargs kill
-            echo "📦 Stopped Webpack dev server processes: $webpack_pids"
-        fi
-    fi
-
-    # Clean up all PID and port files
-    rm -f "$worktree_path/tmp/.rails_pid" 2>/dev/null
-    rm -f "$worktree_path/tmp/.rails_port" 2>/dev/null
-    rm -f "$worktree_path/tmp/.webpack_pid" 2>/dev/null
-    rm -f "$worktree_path/tmp/.webpack_port" 2>/dev/null
+    # Stop servers for this worktree
+    stop_worktree_servers "$worktree_path" "$feature_name"
 
     # Close RubyMine window for this worktree
     close_rubymine_window "$feature_name"
@@ -680,29 +721,8 @@ remove_worktree() {
         fi
     fi
 
-    # Check if branch has any unique commits compared to main
-    local main_branch=$(git -C "$project_dir" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
-    if [ -z "$main_branch" ]; then
-        main_branch="main"  # Default to main if can't detect
-    fi
-
-    # Count commits that are in feature branch but not in main branch
-    local unique_commits=$(git -C "$project_dir" rev-list --count "${main_branch}..${feature_name}" 2>/dev/null || echo "0")
-
-    if [ "$unique_commits" -eq 0 ]; then
-        # No unique commits, auto-delete without asking
-        git -C "$project_dir" branch -D "$feature_name" 2>/dev/null
-        echo "🗑️  Auto-deleted branch '$feature_name' (no unique commits)"
-    else
-        # Has unique commits, ask user
-        echo "⚠️  Branch '$feature_name' has $unique_commits unique commit(s)"
-        echo -n "🗑️  Delete branch '$feature_name'? (y/N): "
-        read -r REPLY </dev/tty
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            git -C "$project_dir" branch -D "$feature_name"
-            echo "🗑️  Deleted branch '$feature_name'"
-        fi
-    fi
+    # Offer branch deletion
+    offer_branch_deletion "$project_dir" "$feature_name"
 
     echo "✅ Worktree '$feature_name' removed and servers stopped."
 }
@@ -857,7 +877,17 @@ merge_worktree() {
             cd "$project_dir"
             remove_worktree "$feature_name"
         else
-            echo "⏭️  Skipping worktree removal. You can remove it later with: wt remove $feature_name"
+            echo "⏭️  Keeping worktree '$feature_name' for reference"
+            echo ""
+            # Still stop servers to free up ports (the feature is merged, dev servers not needed)
+            echo "🛑 Stopping servers to free up ports..."
+            stop_worktree_servers "$worktree_path" "$feature_name"
+            echo ""
+            # Offer branch deletion since it's merged
+            offer_branch_deletion "$project_dir" "$feature_name"
+            echo ""
+            echo "📁 Worktree preserved at: $worktree_path"
+            echo "   Remove later with: wt remove $feature_name"
         fi
     else
         echo "❌ Merge failed. Please resolve conflicts manually."
