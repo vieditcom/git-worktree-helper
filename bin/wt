@@ -859,15 +859,61 @@ merge_worktree() {
         exit 1
     fi
 
+    # Check for uncommitted changes in the main project
+    local main_status=$(git -C "$project_dir" status --porcelain 2>/dev/null)
+    if [ -n "$main_status" ]; then
+        echo "❌ ERROR: Main project has uncommitted changes!"
+        echo ""
+        echo "Uncommitted files:"
+        git -C "$project_dir" status --short
+        echo ""
+        echo "Please commit or stash your changes before merging."
+        echo "   cd $project_dir"
+        echo "   git stash"
+        exit 1
+    fi
+
     echo "🔄 Merging '$feature_name' into '$target_branch'..."
 
     # Switch to target branch and pull latest
     git -C "$project_dir" checkout "$target_branch"
     git -C "$project_dir" pull origin "$target_branch"
 
-    # Merge the feature branch (--no-edit uses Git's default merge message)
-    if git -C "$project_dir" merge --no-edit "$feature_name"; then
-        echo "✅ Successfully merged '$feature_name' into '$target_branch'"
+    # Cascading merge strategy for cleanest possible history:
+    # 1. Try fast-forward (no merge commit needed)
+    # 2. If fails, rebase feature onto target then fast-forward
+    # 3. If rebase conflicts, fall back to regular merge
+    local merge_success=false
+    local merge_method=""
+
+    # Try 1: Fast-forward only (cleanest - works if target hasn't advanced)
+    if git -C "$project_dir" merge --ff-only "$feature_name" 2>/dev/null; then
+        merge_success=true
+        merge_method="fast-forward"
+    else
+        echo "   Fast-forward not possible, attempting rebase..."
+
+        # Try 2: Rebase feature onto target, then fast-forward
+        if git -C "$worktree_path" rebase "$target_branch" 2>/dev/null; then
+            if git -C "$project_dir" merge --ff-only "$feature_name" 2>/dev/null; then
+                merge_success=true
+                merge_method="rebase + fast-forward"
+            fi
+        else
+            # Rebase had conflicts, abort it
+            git -C "$worktree_path" rebase --abort 2>/dev/null
+            echo "   Rebase had conflicts, falling back to merge..."
+
+            # Try 3: Regular merge (creates merge commit)
+            if git -C "$project_dir" merge --no-edit "$feature_name"; then
+                merge_success=true
+                merge_method="merge commit"
+            fi
+        fi
+    fi
+
+    if [ "$merge_success" = true ]; then
+        echo "✅ Successfully merged '$feature_name' into '$target_branch' ($merge_method)"
 
         # Ask about worktree cleanup
         echo ""
