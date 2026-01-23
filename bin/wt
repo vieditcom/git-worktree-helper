@@ -865,8 +865,8 @@ merge_worktree() {
     git -C "$project_dir" checkout "$target_branch"
     git -C "$project_dir" pull origin "$target_branch"
 
-    # Merge the feature branch
-    if git -C "$project_dir" merge "$feature_name"; then
+    # Merge the feature branch (--no-edit uses Git's default merge message)
+    if git -C "$project_dir" merge --no-edit "$feature_name"; then
         echo "✅ Successfully merged '$feature_name' into '$target_branch'"
 
         # Ask about worktree cleanup
